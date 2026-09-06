@@ -1,14 +1,17 @@
-import { and, asc, desc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, sum } from "drizzle-orm";
 import { db } from "@/db";
 import {
   aiApprovalTable,
+  aiAttachmentTable,
   aiConversationTable,
   aiMessageTable,
+  aiMessageAttachmentTable,
   aiRunEventTable,
   aiRunTable,
 } from "@/db/schema";
+import { validateAiAttachmentBatch, type ValidatedAiAttachment } from "@/lib/ai/attachments";
 import { createHttpError } from "@/lib/api-error";
-import type { AiRoute } from "@/types/ai";
+import type { AiAttachment, AiRoute } from "@/types/ai";
 
 export type AiScope = {
   userId: string;
@@ -51,9 +54,36 @@ export async function createAiConversation(scope: AiScope) {
 
 export async function getAiConversationDetail(scope: AiScope, conversationId: string) {
   const conversation = await requireAiConversation(scope, conversationId);
-  const messages = await db.select().from(aiMessageTable)
+  const messageRows = await db.select().from(aiMessageTable)
     .where(eq(aiMessageTable.conversationId, conversationId))
     .orderBy(asc(aiMessageTable.createdAt));
+  const attachmentRows = await db.select({
+    messageId: aiMessageAttachmentTable.messageId,
+    id: aiAttachmentTable.id,
+    name: aiAttachmentTable.name,
+    mediaType: aiAttachmentTable.mediaType,
+    kind: aiAttachmentTable.kind,
+    sizeBytes: aiAttachmentTable.sizeBytes,
+  }).from(aiMessageAttachmentTable)
+    .innerJoin(aiAttachmentTable, eq(aiMessageAttachmentTable.attachmentId, aiAttachmentTable.id))
+    .where(eq(aiAttachmentTable.conversationId, conversationId))
+    .orderBy(asc(aiMessageAttachmentTable.position));
+  const attachmentsByMessage = new Map<string, AiAttachment[]>();
+  for (const row of attachmentRows) {
+    const attachments = attachmentsByMessage.get(row.messageId) || [];
+    attachments.push({
+      id: row.id,
+      name: row.name,
+      mediaType: row.mediaType,
+      kind: row.kind as AiAttachment["kind"],
+      sizeBytes: row.sizeBytes,
+    });
+    attachmentsByMessage.set(row.messageId, attachments);
+  }
+  const messages = messageRows.map((message) => ({
+    ...message,
+    attachments: attachmentsByMessage.get(message.id) || [],
+  }));
   const runs = await db.select().from(aiRunTable)
     .where(eq(aiRunTable.conversationId, conversationId))
     .orderBy(asc(aiRunTable.createdAt));
@@ -75,12 +105,42 @@ export async function createAiRun(
   conversationId: string,
   content: string,
   route: AiRoute,
+  attachmentInput: {
+    uploads: ValidatedAiAttachment[];
+    attachmentIds: string[];
+  } = { uploads: [], attachmentIds: [] },
 ) {
   const conversation = await requireAiConversation(scope, conversationId);
+  const attachmentIds = [...new Set(attachmentInput.attachmentIds)];
+  const reusedAttachments = attachmentIds.length === 0 ? [] : await db.select({
+    id: aiAttachmentTable.id,
+    name: aiAttachmentTable.name,
+    mediaType: aiAttachmentTable.mediaType,
+    kind: aiAttachmentTable.kind,
+    sizeBytes: aiAttachmentTable.sizeBytes,
+  }).from(aiAttachmentTable).where(and(
+    eq(aiAttachmentTable.conversationId, conversationId),
+    inArray(aiAttachmentTable.id, attachmentIds),
+  ));
+  if (reusedAttachments.length !== attachmentIds.length) {
+    throw createHttpError("One or more attachments are unavailable.", 400);
+  }
+  const [{ totalBytes }] = await db.select({ totalBytes: sum(aiAttachmentTable.sizeBytes) })
+    .from(aiAttachmentTable)
+    .where(eq(aiAttachmentTable.conversationId, conversationId));
+  validateAiAttachmentBatch(
+    [...reusedAttachments, ...attachmentInput.uploads],
+    Number(totalBytes || 0),
+    attachmentInput.uploads.reduce((total, attachment) => total + attachment.sizeBytes, 0),
+  );
+
   const messageId = crypto.randomUUID();
   const runId = crypto.randomUUID();
   const now = new Date();
-  const title = content.trim().replace(/\s+/g, " ").slice(0, 72) || "New conversation";
+  const attachmentNames = [...reusedAttachments, ...attachmentInput.uploads].map((attachment) => attachment.name);
+  const title = content.trim().replace(/\s+/g, " ").slice(0, 72)
+    || attachmentNames.join(", ").slice(0, 72)
+    || "New conversation";
 
   await db.transaction(async (tx) => {
     await tx.insert(aiMessageTable).values({
@@ -91,6 +151,21 @@ export async function createAiRun(
       metadata: {},
       createdAt: now,
     });
+    const uploadedRows = attachmentInput.uploads.map((attachment) => ({
+      id: crypto.randomUUID(),
+      conversationId,
+      ...attachment,
+      createdAt: now,
+    }));
+    if (uploadedRows.length > 0) await tx.insert(aiAttachmentTable).values(uploadedRows);
+    const linkedIds = [...attachmentIds, ...uploadedRows.map((attachment) => attachment.id)];
+    if (linkedIds.length > 0) {
+      await tx.insert(aiMessageAttachmentTable).values(linkedIds.map((attachmentId, position) => ({
+        messageId,
+        attachmentId,
+        position,
+      })));
+    }
     await tx.insert(aiRunTable).values({
       id: runId,
       conversationId,
@@ -110,6 +185,34 @@ export async function createAiRun(
   });
 
   return { runId, messageId };
+}
+
+export async function getAiMessageAttachments(messageId: string) {
+  return db.select({
+    id: aiAttachmentTable.id,
+    name: aiAttachmentTable.name,
+    mediaType: aiAttachmentTable.mediaType,
+    kind: aiAttachmentTable.kind,
+    sizeBytes: aiAttachmentTable.sizeBytes,
+    content: aiAttachmentTable.content,
+  }).from(aiMessageAttachmentTable)
+    .innerJoin(aiAttachmentTable, eq(aiMessageAttachmentTable.attachmentId, aiAttachmentTable.id))
+    .where(eq(aiMessageAttachmentTable.messageId, messageId))
+    .orderBy(asc(aiMessageAttachmentTable.position));
+}
+
+export async function requireAiAttachment(
+  scope: AiScope,
+  conversationId: string,
+  attachmentId: string,
+) {
+  await requireAiConversation(scope, conversationId);
+  const [attachment] = await db.select().from(aiAttachmentTable).where(and(
+    eq(aiAttachmentTable.id, attachmentId),
+    eq(aiAttachmentTable.conversationId, conversationId),
+  )).limit(1);
+  if (!attachment) throw createHttpError("Attachment not found.", 404);
+  return attachment;
 }
 
 export async function appendAiEvent(runId: string, type: string, data: Record<string, unknown> = {}) {

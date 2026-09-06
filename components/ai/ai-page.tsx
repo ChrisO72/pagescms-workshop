@@ -3,13 +3,18 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  FileText,
   GitBranch,
+  ImageIcon,
   Loader2,
+  Paperclip,
   Plus,
   Rocket,
   Sparkles,
   Square,
+  X,
 } from "lucide-react";
+import Image from "next/image";
 import { toast } from "sonner";
 import { DocumentTitle, formatRepoBranchTitle } from "@/components/document-title";
 import { getOttoState, OttoPortrait, OttoStatus } from "@/components/ai/otto-portrait";
@@ -25,7 +30,16 @@ import {
 } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import { useConfig } from "@/contexts/config-context";
-import type { AiApproval, AiConversationSummary, AiMessage, AiRunEvent } from "@/types/ai";
+import {
+  AI_ATTACHMENT_ACCEPT,
+  AI_ATTACHMENT_MAX_BYTES,
+  AI_ATTACHMENT_MAX_FILES,
+  type AiApproval,
+  type AiAttachment,
+  type AiConversationSummary,
+  type AiMessage,
+  type AiRunEvent,
+} from "@/types/ai";
 
 type Run = {
   id: string;
@@ -55,15 +69,54 @@ function shortModel(model: string) {
   return model.replace("gpt-5.6-", "");
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isAcceptedFile(file: File) {
+  if (["image/png", "image/jpeg", "image/webp"].includes(file.type)) return true;
+  const extension = file.name.toLowerCase().split(".").at(-1);
+  return Boolean(extension && AI_ATTACHMENT_ACCEPT.split(",").includes(`.${extension}`));
+}
+
+function PendingFileChip({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return (
+    <div className="flex max-w-52 items-center gap-2 rounded-md border bg-muted/30 p-1.5 pr-2 text-xs">
+      {preview ? <Image unoptimized src={preview} alt="" width={28} height={28} className="size-7 rounded object-cover" />
+        : <FileText className="size-4 shrink-0 text-muted-foreground" />}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{file.name}</span>
+        <span className="text-muted-foreground">{formatFileSize(file.size)}</span>
+      </span>
+      <button type="button" onClick={onRemove} aria-label={`Remove ${file.name}`} className="rounded p-0.5 hover:bg-muted">
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 export function AiPage() {
   const { config } = useConfig();
   const [conversations, setConversations] = useState<AiConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [message, setMessage] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [reusedAttachments, setReusedAttachments] = useState<AiAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isPinnedToBottomRef = useRef(true);
 
   const headerNode = useMemo(() => (
@@ -158,20 +211,61 @@ export function AiPage() {
     isPinnedToBottomRef.current = distanceFromBottom <= 48;
   };
 
+  const selectedBytes = pendingFiles.reduce((total, file) => total + file.size, 0)
+    + reusedAttachments.reduce((total, attachment) => total + attachment.sizeBytes, 0);
+
+  const addFiles = (incoming: File[]) => {
+    if (activeRun || sending) return;
+    const accepted = incoming.filter(isAcceptedFile);
+    if (accepted.length !== incoming.length) {
+      toast.error("Otto currently accepts PNG, JPEG, WebP, and plain-text or code files.");
+    }
+    const unique = accepted.filter((file) => !pendingFiles.some((current) => (
+      current.name === file.name && current.size === file.size && current.lastModified === file.lastModified
+    )));
+    if (pendingFiles.length + reusedAttachments.length + unique.length > AI_ATTACHMENT_MAX_FILES) {
+      toast.error(`Attach up to ${AI_ATTACHMENT_MAX_FILES} files per message.`);
+      return;
+    }
+    const incomingBytes = unique.reduce((total, file) => total + file.size, 0);
+    if (selectedBytes + incomingBytes > AI_ATTACHMENT_MAX_BYTES) {
+      toast.error("Attachments can total at most 4 MiB per message.");
+      return;
+    }
+    setPendingFiles((current) => [...current, ...unique]);
+  };
+
+  const reuseAttachment = (attachment: AiAttachment) => {
+    if (activeRun || sending || reusedAttachments.some((current) => current.id === attachment.id)) return;
+    if (pendingFiles.length + reusedAttachments.length >= AI_ATTACHMENT_MAX_FILES) {
+      toast.error(`Attach up to ${AI_ATTACHMENT_MAX_FILES} files per message.`);
+      return;
+    }
+    if (selectedBytes + attachment.sizeBytes > AI_ATTACHMENT_MAX_BYTES) {
+      toast.error("Attachments can total at most 4 MiB per message.");
+      return;
+    }
+    setReusedAttachments((current) => [...current, attachment]);
+  };
+
   const createConversation = async () => {
     try {
       const item = await request<AiConversationSummary>(`${base}/conversations`, { method: "POST" });
       setConversations((current) => [item, ...current]);
       setConversationId(item.id);
       setMessage("");
+      setPendingFiles([]);
+      setReusedAttachments([]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create a conversation.");
     }
   };
 
-  const sendMessage = async (content = message) => {
+  const sendMessage = async (content = message, retryAttachments?: AiAttachment[]) => {
     const trimmed = content.trim();
-    if (!trimmed || sending || activeRun) return;
+    const filesToSend = pendingFiles;
+    const attachmentsToReuse = retryAttachments ?? reusedAttachments;
+    if ((!trimmed && filesToSend.length === 0 && attachmentsToReuse.length === 0) || sending || activeRun) return;
     setSending(true);
     try {
       let id = conversationId;
@@ -181,14 +275,21 @@ export function AiPage() {
         setConversationId(id);
       }
       setMessage("");
+      setPendingFiles([]);
+      setReusedAttachments([]);
+      const form = new FormData();
+      form.set("content", trimmed);
+      filesToSend.forEach((file) => form.append("files", file));
+      attachmentsToReuse.forEach((attachment) => form.append("attachmentIds", attachment.id));
       await request(`${base}/conversations/${id}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: trimmed }),
+        body: form,
       });
       await Promise.all([loadDetail(id), loadConversations()]);
     } catch (error) {
       setMessage(trimmed);
+      setPendingFiles(filesToSend);
+      setReusedAttachments(attachmentsToReuse);
       toast.error(error instanceof Error ? error.message : "Could not send the message.");
     } finally {
       setSending(false);
@@ -301,7 +402,39 @@ export function AiPage() {
                           {item.role === "user" ? "You" : "Otto"}
                         </div>
                         <div className="min-w-0">
-                          <div className="whitespace-pre-wrap break-words text-foreground/90">{item.content}</div>
+                          {item.content ? <div className="whitespace-pre-wrap break-words text-foreground/90">{item.content}</div> : null}
+                          {item.attachments.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {item.attachments.map((attachment) => {
+                                const url = `${base}/conversations/${conversationId}/attachments/${encodeURIComponent(attachment.id)}`;
+                                return (
+                                  <div key={attachment.id} className="flex max-w-60 items-center gap-2 rounded-md border bg-muted/20 p-1.5 pr-2 text-xs">
+                                    {attachment.kind === "image" ? (
+                                      <a href={url} target="_blank" rel="noreferrer" className="shrink-0">
+                                        <Image unoptimized src={url} alt={attachment.name} width={36} height={36} className="size-9 rounded object-cover" />
+                                      </a>
+                                    ) : <FileText className="size-4 shrink-0 text-muted-foreground" />}
+                                    <a href={url} download={attachment.name} className="min-w-0 flex-1 hover:underline">
+                                      <span className="block truncate font-medium">{attachment.name}</span>
+                                      <span className="text-muted-foreground">{formatFileSize(attachment.sizeBytes)}</span>
+                                    </a>
+                                    {item.role === "user" ? (
+                                      <button
+                                        type="button"
+                                        aria-label={`Attach ${attachment.name} again`}
+                                        title="Attach again"
+                                        disabled={Boolean(activeRun) || sending}
+                                        onClick={() => reuseAttachment(attachment)}
+                                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                                      >
+                                        <Paperclip className="size-3.5" />
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                           {run && (
                             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                               <span className="capitalize">{shortModel(run.model)}</span>
@@ -347,7 +480,51 @@ export function AiPage() {
 
           <div className="border-t bg-background p-3 sm:p-4">
             <div className="mx-auto max-w-3xl space-y-2">
-              <InputGroup className="items-end rounded-xl bg-background shadow-sm">
+              <InputGroup
+                className={draggingFiles ? "items-end rounded-xl border-primary bg-primary/5 shadow-sm" : "items-end rounded-xl bg-background shadow-sm"}
+                onDragOver={(event) => {
+                  if (activeRun || sending || !event.dataTransfer.types.includes("Files")) return;
+                  event.preventDefault();
+                  setDraggingFiles(true);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFiles(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDraggingFiles(false);
+                  addFiles(Array.from(event.dataTransfer.files));
+                }}
+              >
+                {(pendingFiles.length > 0 || reusedAttachments.length > 0) ? (
+                  <InputGroupAddon align="block-start" className="flex-wrap gap-2 pb-0">
+                    {pendingFiles.map((file, index) => (
+                      <PendingFileChip
+                        key={`${file.name}:${file.size}:${file.lastModified}:${index}`}
+                        file={file}
+                        onRemove={() => setPendingFiles((current) => current.filter((_, candidate) => candidate !== index))}
+                      />
+                    ))}
+                    {reusedAttachments.map((attachment) => (
+                      <div key={attachment.id} className="flex max-w-52 items-center gap-2 rounded-md border bg-muted/30 p-1.5 pr-2 text-xs">
+                        {attachment.kind === "image" ? <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+                          : <FileText className="size-4 shrink-0 text-muted-foreground" />}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{attachment.name}</span>
+                          <span className="text-muted-foreground">{formatFileSize(attachment.sizeBytes)}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setReusedAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                          aria-label={`Remove ${attachment.name}`}
+                          className="rounded p-0.5 hover:bg-muted"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </InputGroupAddon>
+                ) : null}
                 <InputGroupTextarea
                   aria-label="Message Otto"
                   placeholder="Ask Otto to update your site..."
@@ -355,6 +532,12 @@ export function AiPage() {
                   value={message}
                   disabled={Boolean(activeRun) || sending}
                   onChange={(event) => setMessage(event.target.value)}
+                  onPaste={(event) => {
+                    const files = Array.from(event.clipboardData.files);
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    addFiles(files);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -363,12 +546,41 @@ export function AiPage() {
                   }}
                   className="min-h-20 max-h-40"
                 />
-                <InputGroupAddon align="block-end" className="justify-end pt-0">
+                <InputGroupAddon align="block-end" className="justify-between pt-0">
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      hidden
+                      multiple
+                      accept={AI_ATTACHMENT_ACCEPT}
+                      onChange={(event) => {
+                        addFiles(Array.from(event.target.files || []));
+                        event.target.value = "";
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="Attach files"
+                      title="Attach files"
+                      disabled={Boolean(activeRun) || sending}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Paperclip />
+                    </Button>
+                    {(pendingFiles.length > 0 || reusedAttachments.length > 0) ? (
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {formatFileSize(selectedBytes)} / 4 MB
+                      </span>
+                    ) : null}
+                  </div>
                   <Button
                     size="icon-sm"
                     aria-label={activeRun ? "Stop Otto" : "Send message"}
                     variant={activeRun ? "destructive" : "default"}
-                    disabled={!activeRun && (!message.trim() || sending)}
+                    disabled={!activeRun && (!message.trim() && pendingFiles.length === 0 && reusedAttachments.length === 0 || sending)}
                     onClick={() => activeRun ? cancelRun() : sendMessage()}
                   >
                     {activeRun ? <Square className="fill-current" /> : sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
@@ -378,7 +590,12 @@ export function AiPage() {
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>Commits go to {config.branch}; successful commits automatically get a preview.</span>
                 {!activeRun && lastUserMessage && detail?.runs.at(-1)?.status === "failed" && (
-                  <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => sendMessage(lastUserMessage.content)}>Retry</Button>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    onClick={() => sendMessage(lastUserMessage.content, lastUserMessage.attachments)}
+                  >Retry</Button>
                 )}
               </div>
             </div>

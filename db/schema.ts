@@ -9,8 +9,16 @@ import {
   index,
   uniqueIndex,
   jsonb,
+  customType,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 const userTable = pgTable("user", {
   id: text("id").notNull().primaryKey(),
@@ -244,6 +252,34 @@ const aiMessageTable = pgTable("ai_message", {
   ),
 }));
 
+const aiAttachmentTable = pgTable("ai_attachment", {
+  id: text("id").notNull().primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => aiConversationTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  mediaType: text("media_type").notNull(),
+  kind: text("kind").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  content: bytea("content").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => ({
+  idx_ai_attachment_conversation: index("idx_ai_attachment_conversation").on(
+    table.conversationId,
+    table.createdAt,
+  ),
+}));
+
+const aiMessageAttachmentTable = pgTable("ai_message_attachment", {
+  messageId: text("message_id").notNull().references(() => aiMessageTable.id, { onDelete: "cascade" }),
+  attachmentId: text("attachment_id").notNull().references(() => aiAttachmentTable.id, { onDelete: "cascade" }),
+  position: integer("position").notNull(),
+}, table => ({
+  pk_ai_message_attachment: primaryKey({ columns: [table.messageId, table.attachmentId] }),
+  idx_ai_message_attachment_message: index("idx_ai_message_attachment_message").on(
+    table.messageId,
+    table.position,
+  ),
+}));
+
 const aiRunTable = pgTable("ai_run", {
   id: text("id").notNull().primaryKey(),
   conversationId: text("conversation_id").notNull().references(() => aiConversationTable.id, { onDelete: "cascade" }),
@@ -310,6 +346,8 @@ export {
   actionRunTable,
   aiConversationTable,
   aiMessageTable,
+  aiAttachmentTable,
+  aiMessageAttachmentTable,
   aiRunTable,
   aiRunEventTable,
   aiApprovalTable,

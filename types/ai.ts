@@ -18,11 +18,33 @@ export type AiConversationSummary = {
   updatedAt: string;
 };
 
+export const AI_ATTACHMENT_MAX_FILES = 4;
+export const AI_ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
+export const AI_ATTACHMENT_CONVERSATION_MAX_BYTES = 40 * 1024 * 1024;
+export const AI_ATTACHMENT_ACCEPT = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  ".txt", ".md", ".csv", ".json", ".jsonl", ".yaml", ".yml", ".xml",
+  ".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+  ".astro", ".vue", ".svelte", ".toml", ".ini", ".env", ".sql", ".graphql",
+  ".gql", ".sh", ".svg",
+].join(",");
+
+export type AiAttachment = {
+  id: string;
+  name: string;
+  mediaType: string;
+  kind: "image" | "text";
+  sizeBytes: number;
+};
+
 export type AiMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   metadata: Record<string, unknown>;
+  attachments: AiAttachment[];
   createdAt: string;
 };
 

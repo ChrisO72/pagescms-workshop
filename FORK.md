@@ -27,6 +27,14 @@ The initial functional implementation is intentionally self-contained:
   production approval, elapsed time, and a live Codex-style activity timeline.
   The timeline preserves readable reasoning summaries, commentary, commands and
   their output, file changes, web searches, MCP calls, deploys, and failures.
+- Ask Otto messages support up to four PNG, JPEG, WebP, or UTF-8 text/code
+  attachments totaling 4 MiB per message and 40 MiB of unique files per
+  conversation. Files are stored privately in PostgreSQL, can be downloaded or
+  attached again without duplicating bytes, and remain scoped to the
+  conversation creator. During a run, only the current message's attachments
+  are written below `.git/pagescms-ai-attachments` in the disposable checkout,
+  keeping them out of commits; raster images are also passed to Codex as native
+  `localImage` inputs.
 - `app/api/[owner]/[repo]/[branch]/ai` contains repository-scoped conversation,
   message, SSE event, cancellation, and approval endpoints.
 - `lib/ai/router.ts` sends every message through `gpt-5.6-luna` using strict
@@ -63,8 +71,9 @@ The initial functional implementation is intentionally self-contained:
   the exact names `deploy-preview` and `deploy`; no configuration schema was
   added. Production deploys require an explicit, creator-only approval pinned
   to the branch SHA, and are invalidated if that SHA changes.
-- `db/schema.ts` and migration `0013_worried_marrow.sql` add private
-  conversations, messages, runs, streamed events, and approval records.
+- `db/schema.ts` and migrations `0013_worried_marrow.sql` and
+  `0014_parched_impossible_man.sql` add private conversations, messages,
+  attachments, runs, streamed events, and approval records.
 - `types/ai.ts` contains the fork's shared AI API types.
 
 The AI runtime assumes a long-lived Node process. In-process run handles are
