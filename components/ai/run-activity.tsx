@@ -47,6 +47,17 @@ type ActivityPresentation = {
 };
 
 const terminal = new Set(["completed", "failed", "cancelled"]);
+const workshopSetupEvents = new Set([
+  "run.started",
+  "repository.cloning",
+  "repository.ready",
+  "runtime.starting",
+  "runtime.authenticated",
+  "mcp.starting",
+  "mcp.ready",
+  "turn.starting",
+  "turn.started",
+]);
 
 function formatDuration(milliseconds: number) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -65,6 +76,23 @@ function buildActivities(events: AiRunEvent[]) {
 
   for (const event of events) {
     if (["agent.delta", "agent.final", "message.delta", "run.completed", "run.failed", "run.cancelled"].includes(event.type)) continue;
+    const isRoutineMcpStatus = event.type === "mcp.status" && event.data.status !== "failed";
+    if (workshopSetupEvents.has(event.type) || isRoutineMcpStatus) {
+      const key = "workshop-setup";
+      const existingIndex = indexes.get(key);
+      const ready = event.type === "turn.started";
+      if (existingIndex != null) {
+        const existing = entries[existingIndex];
+        entries[existingIndex] = {
+          ...existing,
+          data: { ready: Boolean(existing.data.ready) || ready },
+        };
+      } else {
+        indexes.set(key, entries.length);
+        entries.push({ id: event.id, key, type: "workshop.setup", data: { ready } });
+      }
+      continue;
+    }
     const itemId = String(event.data.itemId || "");
     if (event.type === "command.output" && completedItems.has(itemId)) continue;
     const mergeableDelta = ["reasoning.delta", "plan.delta", "command.output"].includes(event.type);
@@ -93,15 +121,11 @@ function buildActivities(events: AiRunEvent[]) {
 
 function activityPresentation(activity: Activity): ActivityPresentation {
   const { type, data } = activity;
-  if (type === "run.started") return { icon: Sparkles, title: "Started agent", detail: null };
-  if (type === "repository.cloning") return { icon: GitCommit, title: "Cloning repository", detail: null };
-  if (type === "repository.ready") return { icon: GitCommit, title: "Prepared repository", detail: `Checked out ${data.branch}` };
-  if (type === "runtime.starting") return { icon: Loader2, title: "Starting Codex runtime", detail: null };
-  if (type === "runtime.authenticated") return { icon: CheckCircle2, title: "Connected to OpenAI", detail: null };
-  if (type === "mcp.starting") return { icon: Wrench, title: "Connecting Pages CMS tools", detail: null };
-  if (type === "mcp.ready") return { icon: Wrench, title: "Pages CMS tools ready", detail: `${Array.isArray(data.tools) ? data.tools.length : 0} tools available` };
-  if (type === "turn.starting") return { icon: Sparkles, title: "Sending task to agent", detail: `${data.model} · ${data.effort} effort` };
-  if (type === "turn.started") return { icon: Sparkles, title: "Agent began working", detail: null };
+  if (type === "workshop.setup") return {
+    icon: data.ready ? Wrench : Loader2,
+    title: data.ready ? "Otto’s workshop is ready" : "Otto is tuning up the workshop…",
+    detail: null,
+  };
   if (type === "mcp.status") return {
     icon: data.status === "failed" ? AlertCircle : Wrench,
     title: `Pages CMS MCP ${data.status || "updated"}`,
@@ -195,7 +219,11 @@ export function RunActivity({ run, events }: { run: Run; events: AiRunEvent[] })
         const hasDetails = Boolean(presentation.detail || presentation.output);
         const summary = (
           <>
-            <Icon className={cn("size-4 shrink-0 text-muted-foreground", presentation.failed && "text-destructive")} />
+            <Icon className={cn(
+              "size-4 shrink-0 text-muted-foreground",
+              activity.type === "workshop.setup" && !activity.data.ready && "animate-spin",
+              presentation.failed && "text-destructive",
+            )} />
             <span className="min-w-0 flex-1 truncate font-medium">{presentation.title}</span>
             {hasDetails && <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />}
           </>
