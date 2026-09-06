@@ -70,6 +70,7 @@ import {
   LogOut,
   Moon,
   Settings,
+  Sparkles,
   Sun,
   Users,
 } from "lucide-react";
@@ -366,6 +367,18 @@ export function RepoSidebar() {
     () => getRootActions(config?.object),
     [config?.object],
   );
+  const aiItems = useMemo<NavItem[]>(() => {
+    if (!config) return [];
+
+    return [
+      {
+        key: "ai-assistant",
+        label: "AI Assistant",
+        href: `/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/ai`,
+        icon: <Sparkles className="size-4" />,
+      },
+    ];
+  }, [config]);
 
   const getNodeHref = useCallback(
     (node: NavigationNode) => {
@@ -570,6 +583,7 @@ export function RepoSidebar() {
   };
 
   const groups = [
+    renderFlatGroup("AI", aiItems),
     renderNavigationGroup("Content", contentNavigation),
     renderNavigationGroup("Media", mediaNavigation),
     rootActions.length > 0 && config

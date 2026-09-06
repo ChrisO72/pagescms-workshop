@@ -209,6 +209,92 @@ const actionRunTable = pgTable("action_run", {
   idx_action_run_workflowRunId: uniqueIndex("idx_action_run_workflowRunId").on(table.workflowRunId),
 }));
 
+// Fork-only AI tables. Conversations are deliberately scoped to their creator;
+// API queries must always include userId as well as the repository coordinates.
+const aiConversationTable = pgTable("ai_conversation", {
+  id: text("id").notNull().primaryKey(),
+  userId: text("user_id").notNull().references(() => userTable.id, { onDelete: "cascade" }),
+  owner: text("owner").notNull(),
+  repo: text("repo").notNull(),
+  branch: text("branch").notNull(),
+  title: text("title").notNull().default("New conversation"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, table => ({
+  idx_ai_conversation_scope: index("idx_ai_conversation_scope").on(
+    table.userId,
+    table.owner,
+    table.repo,
+    table.branch,
+    table.updatedAt,
+  ),
+}));
+
+const aiMessageTable = pgTable("ai_message", {
+  id: text("id").notNull().primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => aiConversationTable.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata").notNull().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => ({
+  idx_ai_message_conversation: index("idx_ai_message_conversation").on(
+    table.conversationId,
+    table.createdAt,
+  ),
+}));
+
+const aiRunTable = pgTable("ai_run", {
+  id: text("id").notNull().primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => aiConversationTable.id, { onDelete: "cascade" }),
+  userMessageId: text("user_message_id").notNull().references(() => aiMessageTable.id, { onDelete: "cascade" }),
+  assistantMessageId: text("assistant_message_id").references(() => aiMessageTable.id, { onDelete: "set null" }),
+  model: text("model").notNull(),
+  effort: text("effort").notNull(),
+  category: text("category").notNull(),
+  rationale: text("rationale").notNull(),
+  status: text("status").notNull().default("queued"),
+  baseSha: text("base_sha"),
+  headSha: text("head_sha"),
+  workspacePath: text("workspace_path"),
+  failure: jsonb("failure"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, table => ({
+  idx_ai_run_conversation: index("idx_ai_run_conversation").on(
+    table.conversationId,
+    table.createdAt,
+  ),
+  idx_ai_run_status: index("idx_ai_run_status").on(table.status),
+}));
+
+const aiRunEventTable = pgTable("ai_run_event", {
+  id: serial("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => aiRunTable.id, { onDelete: "cascade" }),
+  type: text("type").notNull(),
+  data: jsonb("data").notNull().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, table => ({
+  idx_ai_run_event_run: index("idx_ai_run_event_run").on(table.runId, table.id),
+}));
+
+const aiApprovalTable = pgTable("ai_approval", {
+  id: text("id").notNull().primaryKey(),
+  runId: text("run_id").notNull().references(() => aiRunTable.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  status: text("status").notNull().default("pending"),
+  requestedSha: text("requested_sha").notNull(),
+  details: jsonb("details").notNull().default({}),
+  decidedBy: text("decided_by").references(() => userTable.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  decidedAt: timestamp("decided_at"),
+}, table => ({
+  idx_ai_approval_run: index("idx_ai_approval_run").on(table.runId, table.createdAt),
+  idx_ai_approval_status: index("idx_ai_approval_status").on(table.status),
+}));
+
 export {
   userTable,
   sessionTable,
@@ -221,5 +307,10 @@ export {
   cacheFileTable,
   cacheFileMetaTable,
   cachePermissionTable,
-  actionRunTable
+  actionRunTable,
+  aiConversationTable,
+  aiMessageTable,
+  aiRunTable,
+  aiRunEventTable,
+  aiApprovalTable,
 };
