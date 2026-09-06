@@ -373,7 +373,7 @@ export function RepoSidebar() {
     return [
       {
         key: "ai-assistant",
-        label: "AI Assistant",
+        label: "Ask Otto",
         href: `/${config.owner}/${config.repo}/${encodeURIComponent(config.branch)}/ai`,
         icon: <Sparkles className="size-4" />,
       },

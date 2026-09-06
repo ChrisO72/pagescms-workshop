@@ -15,7 +15,6 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { AiRunEvent } from "@/types/ai";
 
@@ -180,53 +179,78 @@ export function RunActivity({ run, events }: { run: Run; events: AiRunEvent[] })
             : "Working";
 
   return (
-    <div className="rounded-xl border bg-muted/10">
-      <div className="flex items-center gap-2 border-b px-4 py-3">
-        {run.status === "completed" ? <CheckCircle2 className="size-4 text-green-600" />
-          : run.status === "failed" ? <AlertCircle className="size-4 text-destructive" />
-            : isActive ? <Loader2 className="size-4 animate-spin text-primary" />
-              : <CircleDot className="size-4" />}
-        <span className="text-sm font-medium">{statusLabel}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">{duration}</span>
-        <Badge variant="outline" className="ml-auto capitalize">{run.model.replace("gpt-5.6-", "")}</Badge>
-      </div>
-      <div className="space-y-1 p-3">
-        {activities.map((activity) => {
-          const presentation = activityPresentation(activity);
-          const Icon = presentation.icon;
+    <div className="space-y-3">
+      {activities.map((activity) => {
+        if (activity.type === "agent.commentary") {
           return (
-            <div key={activity.key} className="group flex gap-3 rounded-lg px-2 py-2 text-sm hover:bg-muted/50">
-              <Icon className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground", presentation.failed && "text-destructive")} />
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{presentation.title}</p>
-                {presentation.detail && (
-                  <p className={cn(
-                    "mt-0.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground",
-                    activity.data.type === "commandExecution" && "font-mono",
-                  )}>{String(presentation.detail)}</p>
-                )}
-                {presentation.output && (
-                  <details className="mt-1 text-xs text-muted-foreground">
-                    <summary className="flex cursor-pointer list-none items-center gap-1"><ChevronRight className="size-3" /> View output</summary>
-                    <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-background p-2 whitespace-pre-wrap">{String(presentation.output)}</pre>
-                  </details>
-                )}
-              </div>
+            <div key={activity.key} className="grid gap-1.5 text-sm leading-relaxed sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4">
+              <div className="font-medium text-primary">Otto</div>
+              <div className="whitespace-pre-wrap break-words text-foreground/90">{String(activity.data.text || "")}</div>
             </div>
           );
-        })}
-        {liveText && (
-          <div className="flex gap-3 rounded-lg bg-primary/5 px-2 py-2 text-sm">
-            <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">Agent</p>
-              <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">{liveText}</p>
-            </div>
+        }
+
+        const presentation = activityPresentation(activity);
+        const Icon = presentation.icon;
+        const hasDetails = Boolean(presentation.detail || presentation.output);
+        const summary = (
+          <>
+            <Icon className={cn("size-4 shrink-0 text-muted-foreground", presentation.failed && "text-destructive")} />
+            <span className="min-w-0 flex-1 truncate font-medium">{presentation.title}</span>
+            {hasDetails && <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />}
+          </>
+        );
+
+        return (
+          <div key={activity.key} className="min-w-0 text-sm sm:ml-24">
+            {hasDetails ? (
+              <details className="group min-w-0">
+                <summary className="flex cursor-pointer list-none items-center gap-3 rounded-md py-0.5 hover:text-foreground">
+                  {summary}
+                </summary>
+                <div className="pb-1 pl-7 pt-1">
+                  {presentation.detail != null ? (
+                    <p className={cn(
+                      "whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground",
+                      activity.data.type === "commandExecution" && "font-mono",
+                    )}>{String(presentation.detail)}</p>
+                  ) : null}
+                  {presentation.output != null ? (
+                    <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 whitespace-pre-wrap text-xs text-muted-foreground">{String(presentation.output)}</pre>
+                  ) : null}
+                </div>
+              </details>
+            ) : (
+              <div className="flex min-w-0 items-center gap-3 py-0.5">{summary}</div>
+            )}
           </div>
-        )}
-        {activities.length === 0 && isActive && <p className="px-2 py-1 text-xs text-muted-foreground">Starting the agent…</p>}
-        {run.failure?.message && <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{run.failure.message}</p>}
-      </div>
+        );
+      })}
+
+      {isActive && (
+        <div className="grid gap-1.5 text-sm leading-relaxed sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4">
+          <div className="font-medium text-primary">Otto</div>
+          <div className="flex min-w-0 items-start gap-2 text-foreground/90">
+            <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-primary" />
+            <span className="whitespace-pre-wrap break-words">{liveText || `${statusLabel}…`}</span>
+          </div>
+        </div>
+      )}
+
+      {!isActive && (
+        <div className="grid gap-1.5 text-sm sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4">
+          <div className="text-xs font-medium text-muted-foreground">Run</div>
+          <div className="flex min-w-0 items-center gap-2 py-0.5 text-muted-foreground">
+            {run.status === "completed" ? <CheckCircle2 className="size-4 shrink-0 text-green-600" />
+              : run.status === "failed" ? <AlertCircle className="size-4 shrink-0 text-destructive" />
+                : <CircleDot className="size-4 shrink-0" />}
+            <span className="text-foreground">{statusLabel}</span>
+            <span className="text-xs tabular-nums">{duration}</span>
+            <span className="text-xs capitalize">· {run.model.replace("gpt-5.6-", "")}</span>
+          </div>
+          {run.failure?.message && <p className="text-xs text-destructive sm:col-start-2">{run.failure.message}</p>}
+        </div>
+      )}
     </div>
   );
 }

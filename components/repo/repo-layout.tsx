@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { RepoSidebar } from "@/components/repo/repo-sidebar";
 import {
   SidebarInset,
@@ -14,6 +15,7 @@ import {
   RepoHeaderProvider,
   useRepoHeaderState,
 } from "@/components/repo/repo-header-context";
+import { cn } from "@/lib/utils";
 
 function RepoHeader() {
   const { header } = useRepoHeaderState();
@@ -36,6 +38,8 @@ function RepoHeader() {
 export function RepoLayout({ children }: { children: React.ReactNode }) {
   const { config } = useConfig();
   const { owner, repo } = useRepo();
+  const pathname = usePathname();
+  const isAiPage = pathname.endsWith("/ai");
 
   useEffect(() => {
     if (config?.owner && config?.repo && config?.branch) {
@@ -44,12 +48,15 @@ export function RepoLayout({ children }: { children: React.ReactNode }) {
   }, [config, owner, repo]);
 
   return (
-    <SidebarProvider>
+    <SidebarProvider className={cn(isAiPage && "h-svh overflow-hidden")}>
       <RepoHeaderProvider>
         <RepoSidebar />
-        <SidebarInset className="min-h-screen">
+        <SidebarInset className={cn(isAiPage ? "h-svh min-h-0 overflow-hidden" : "min-h-screen")}>
           <RepoHeader />
-          <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
+          <main className={cn(
+            "min-w-0 flex-1",
+            isAiPage ? "flex min-h-0 overflow-hidden" : "p-4 md:p-6",
+          )}>{children}</main>
         </SidebarInset>
       </RepoHeaderProvider>
     </SidebarProvider>

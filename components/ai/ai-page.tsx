@@ -1,9 +1,8 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
-  Bot,
   GitBranch,
   Loader2,
   Plus,
@@ -13,9 +12,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { DocumentTitle, formatRepoBranchTitle } from "@/components/document-title";
+import { getOttoState, OttoPortrait, OttoStatus } from "@/components/ai/otto-portrait";
 import { RunActivity } from "@/components/ai/run-activity";
 import { useRepoHeader } from "@/components/repo/repo-header-context";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -27,7 +26,6 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { useConfig } from "@/contexts/config-context";
 import type { AiApproval, AiConversationSummary, AiMessage, AiRunEvent } from "@/types/ai";
-import { cn } from "@/lib/utils";
 
 type Run = {
   id: string;
@@ -66,11 +64,12 @@ export function AiPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const isPinnedToBottomRef = useRef(true);
 
   const headerNode = useMemo(() => (
     <div className="flex min-w-0 items-center gap-2">
       <Sparkles className="size-4 text-primary" />
-      <span className="truncate font-medium">AI Assistant</span>
+      <span className="truncate font-medium">Ask Otto</span>
       <Badge variant="secondary" className="hidden sm:inline-flex">Beta</Badge>
     </div>
   ), []);
@@ -110,12 +109,14 @@ export function AiPage() {
       setDetail(null);
       return;
     }
+    isPinnedToBottomRef.current = true;
     setLoading(true);
     loadDetail(conversationId).catch((error) => toast.error(error.message)).finally(() => setLoading(false));
   }, [conversationId, loadDetail]);
 
   const activeRun = [...(detail?.runs || [])].reverse().find((run) => activeStatuses.has(run.status));
   const activeRunId = activeRun?.id;
+  const ottoState = getOttoState(Boolean(activeRun));
 
   useEffect(() => {
     if (!conversationId || !activeRunId) return;
@@ -144,11 +145,18 @@ export function AiPage() {
     return () => source.close();
   }, [activeRunId, base, conversationId, loadConversations, loadDetail]);
 
-  useEffect(() => {
-    if (!activeRunId) return;
+  useLayoutEffect(() => {
     const transcript = transcriptRef.current;
-    transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
-  }, [activeRunId, detail?.events.length, detail?.messages.length]);
+    if (!transcript || !isPinnedToBottomRef.current) return;
+    transcript.scrollTop = transcript.scrollHeight;
+  }, [conversationId, detail]);
+
+  const updateScrollPin = () => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    const distanceFromBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    isPinnedToBottomRef.current = distanceFromBottom <= 48;
+  };
 
   const createConversation = async () => {
     try {
@@ -215,8 +223,8 @@ export function AiPage() {
 
   return (
     <>
-      <DocumentTitle title={formatRepoBranchTitle("AI Assistant", config.owner, config.repo, config.branch)} />
-      <div className="mx-auto flex h-[calc(100svh-7rem)] min-h-[32rem] w-full max-w-6xl overflow-hidden rounded-xl border bg-background">
+      <DocumentTitle title={formatRepoBranchTitle("Ask Otto", config.owner, config.repo, config.branch)} />
+      <div className="flex h-full min-h-0 w-full overflow-hidden bg-background">
         <aside className="hidden w-64 shrink-0 flex-col border-r bg-muted/20 md:flex">
           <div className="p-3">
             <Button variant="outline" className="w-full justify-start" onClick={createConversation}>
@@ -239,7 +247,7 @@ export function AiPage() {
           <div className="border-t p-3 text-xs text-muted-foreground">Conversations are private to you.</div>
         </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="relative flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2 border-b px-4 py-3">
             <Button size="sm" variant="outline" className="md:hidden" onClick={createConversation}>
               <Plus /> New
@@ -263,17 +271,23 @@ export function AiPage() {
             </Badge>
           </div>
 
-          <div ref={transcriptRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {detail?.messages.length ? (
+            <OttoStatus state={ottoState} className="absolute right-4 top-16 z-20 sm:right-6 sm:top-20" />
+          ) : null}
+
+          <div
+            ref={transcriptRef}
+            className="flex-1 overflow-y-auto p-4 [overflow-anchor:auto] sm:p-6"
+            onScroll={updateScrollPin}
+          >
             {loading && !detail ? (
               <div className="flex h-full items-center justify-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
             ) : !detail?.messages.length ? (
               <Empty className="h-full border-0">
                 <EmptyHeader>
-                  <Avatar className="mx-auto size-12 border bg-primary/10">
-                    <AvatarFallback className="bg-primary/10 text-primary"><Bot className="size-6" /></AvatarFallback>
-                  </Avatar>
-                  <EmptyTitle>What would you like to change?</EmptyTitle>
-                  <EmptyDescription>Ask the agent to inspect or update code, publish changes, or manage a deployment.</EmptyDescription>
+                  <OttoPortrait state="ready" size="hero" />
+                  <EmptyTitle>What can Otto fix for you?</EmptyTitle>
+                  <EmptyDescription>Ask Otto the web mechanic to inspect or update code, publish changes, or manage a deployment.</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
@@ -282,18 +296,15 @@ export function AiPage() {
                   const run = detail.runs.find((candidate) => candidate.userMessageId === item.id);
                   return (
                     <Fragment key={item.id}>
-                      <div className={cn("flex", item.role === "user" ? "justify-end" : "justify-start")}>
-                        <div className={cn(
-                          "max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
-                          item.role === "user" ? "bg-primary text-primary-foreground" : "border bg-card",
-                        )}>
-                          <div className="whitespace-pre-wrap break-words">{item.content}</div>
+                      <div className="grid gap-1.5 text-sm leading-relaxed sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4">
+                        <div className={item.role === "user" ? "font-medium text-foreground" : "font-medium text-primary"}>
+                          {item.role === "user" ? "You" : "Otto"}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="whitespace-pre-wrap break-words text-foreground/90">{item.content}</div>
                           {run && (
-                            <div className={cn(
-                              "mt-2 flex flex-wrap items-center gap-1.5 border-t pt-2 text-xs",
-                              item.role === "user" ? "border-primary-foreground/20 text-primary-foreground/70" : "text-muted-foreground",
-                            )}>
-                              <Badge variant="secondary" className="capitalize">{shortModel(run.model)}</Badge>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                              <span className="capitalize">{shortModel(run.model)}</span>
                               <span>{run.effort} effort</span><span>·</span><span>{run.rationale}</span>
                             </div>
                           )}
@@ -320,7 +331,7 @@ export function AiPage() {
                             Commit <span className="font-mono">{approval.requestedSha.slice(0, 7)}</span> will be deployed to production.
                           </p>
                         </div>
-                        <p className="text-sm">{String(approval.details.reason || "The agent requested a production deployment.")}</p>
+                        <p className="text-sm">{String(approval.details.reason || "Otto requested a production deployment.")}</p>
                         <div className="flex gap-2">
                           <Button size="sm" onClick={() => decideApproval(approval, "approved")}>Approve deploy</Button>
                           <Button size="sm" variant="outline" onClick={() => decideApproval(approval, "rejected")}>Reject</Button>
@@ -330,11 +341,6 @@ export function AiPage() {
                   </div>
                 ))}
 
-                {activeRun && (
-                  <div className="flex justify-end">
-                    <Button size="sm" variant="outline" onClick={cancelRun}><Square className="size-3 fill-current" /> Stop agent</Button>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -343,8 +349,8 @@ export function AiPage() {
             <div className="mx-auto max-w-3xl space-y-2">
               <InputGroup className="items-end rounded-xl bg-background shadow-sm">
                 <InputGroupTextarea
-                  aria-label="Message the AI assistant"
-                  placeholder="Ask the agent to update your site..."
+                  aria-label="Message Otto"
+                  placeholder="Ask Otto to update your site..."
                   rows={2}
                   value={message}
                   disabled={Boolean(activeRun) || sending}
@@ -358,8 +364,14 @@ export function AiPage() {
                   className="min-h-20 max-h-40"
                 />
                 <InputGroupAddon align="block-end" className="justify-end pt-0">
-                  <Button size="icon-sm" aria-label="Send message" disabled={!message.trim() || Boolean(activeRun) || sending} onClick={() => sendMessage()}>
-                    {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+                  <Button
+                    size="icon-sm"
+                    aria-label={activeRun ? "Stop Otto" : "Send message"}
+                    variant={activeRun ? "destructive" : "default"}
+                    disabled={!activeRun && (!message.trim() || sending)}
+                    onClick={() => activeRun ? cancelRun() : sendMessage()}
+                  >
+                    {activeRun ? <Square className="fill-current" /> : sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
                   </Button>
                 </InputGroupAddon>
               </InputGroup>
