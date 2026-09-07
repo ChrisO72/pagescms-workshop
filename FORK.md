@@ -40,10 +40,14 @@ The initial functional implementation is intentionally self-contained:
 - `lib/ai/router.ts` sends every message through `gpt-5.6-luna` using strict
   structured output. It selects `gpt-5.6-luna`, `gpt-5.6-terra`, or
   `gpt-5.6-sol`; a router failure falls back to Terra at medium effort.
-- `lib/ai/runtime.ts` creates a shallow disposable checkout and runs the
-  official Codex App Server over stdio. The selected model and reasoning effort
-  are supplied per turn. Each disposable App Server is authenticated through
-  its `account/login/start` API-key flow, conversation history is injected,
+- `lib/ai/runtime.ts` keeps one warm Otto runtime per user, repository, and
+  branch. A saved chat reuses its shallow disposable checkout, Codex App Server,
+  MCP process, and thread across turns; reopening another saved chat boots a
+  clean runtime and injects that chat's stored history. New Chat ends the warm
+  session. Idle sessions are removed after 30 minutes, at most four sessions
+  remain warm per server instance, and at most two turns run concurrently.
+  The selected model and reasoning effort are supplied per turn. Each App
+  Server is authenticated once through its `account/login/start` API-key flow,
   and live web search plus outbound workspace network access are enabled for
   current external content. Codex runs without its nested Bubblewrap sandbox
   because the Render web service supplies the outer runtime isolation; Otto is
@@ -51,11 +55,16 @@ The initial functional implementation is intentionally self-contained:
   Spawned shell commands inherit only `PATH`, not application secrets. The MCP
   child is launched with the application's absolute Node executable and the
   `tsx` loader, so it does not depend on `PATH`; startup failures are captured
-  in a per-run diagnostic and surfaced in the activity timeline.
+  in a per-session diagnostic and surfaced in the activity timeline. Cleanup
+  interrupts active turns, archives threads, terminates the complete Codex/MCP
+  process group, removes attachment materializations and disposable checkouts,
+  and records discarded dirty filenames. Admins can trigger the same cleanup
+  for every local Otto session from `/admin`.
 - `lib/ai/mcp-server.ts` is a local stdio MCP server exposing repository
   context/refresh/publish and deployment preview/production/list/status/logs/
   cancel tools. Each process receives a signed, expiring capability fixed to a
-  run and workspace; GitHub credentials stay server-side.
+  conversation and workspace; the currently active run is resolved for every
+  tool call and GitHub credentials stay server-side.
 - `lib/ai/repository-config.ts` reads deployment actions directly from the
   selected branch's `.pages.yml`, keeping the standalone MCP process out of the
   browser-oriented field registry. `lib/package.json` marks server library
@@ -78,10 +87,13 @@ The initial functional implementation is intentionally self-contained:
   attachments, runs, streamed events, and approval records.
 - `types/ai.ts` contains the fork's shared AI API types.
 
-The AI runtime assumes a long-lived Node process. In-process run handles are
-used for cancellation while durable messages, status, events, and approvals
-remain in PostgreSQL. This is not designed for request-isolated serverless
-workers.
+The AI runtime assumes a long-lived Node process. Warm sessions, the FIFO turn
+queue, concurrency limits, cancellation, and cleanup handles are local to one
+web-service instance, while durable messages, status, events, and approvals
+remain in PostgreSQL. The UI prevents parallel work for the same website and
+stale durable run state is recovered after a process restart. This is not
+designed for request-isolated serverless workers or multiple web-service
+instances without a shared coordinator.
 
 ## Configuration
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, sum } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sum } from "drizzle-orm";
 import { db } from "@/db";
 import {
   aiApprovalTable,
@@ -19,6 +19,10 @@ export type AiScope = {
   repo: string;
   branch: string;
 };
+
+const activeRunStatuses = ["queued", "running", "waiting_approval"];
+const staleRunCutoffMs = 2 * 60 * 1000;
+const staleQueuedRunCutoffMs = 30 * 60 * 1000;
 
 export const conversationWhere = (scope: AiScope, conversationId: string) => and(
   eq(aiConversationTable.id, conversationId),
@@ -42,6 +46,56 @@ export async function listAiConversations(scope: AiScope) {
     eq(aiConversationTable.repo, scope.repo),
     eq(aiConversationTable.branch, scope.branch),
   )).orderBy(desc(aiConversationTable.updatedAt)).limit(100);
+}
+
+export async function recoverStaleAiRuns(scope: AiScope) {
+  const staleRuns = await db.select({ id: aiRunTable.id }).from(aiRunTable)
+    .innerJoin(aiConversationTable, eq(aiRunTable.conversationId, aiConversationTable.id))
+    .where(and(
+      eq(aiConversationTable.userId, scope.userId),
+      eq(aiConversationTable.owner, scope.owner),
+      eq(aiConversationTable.repo, scope.repo),
+      eq(aiConversationTable.branch, scope.branch),
+      or(
+        and(
+          inArray(aiRunTable.status, ["running", "waiting_approval"]),
+          lt(aiRunTable.updatedAt, new Date(Date.now() - staleRunCutoffMs)),
+        ),
+        and(
+          eq(aiRunTable.status, "queued"),
+          lt(aiRunTable.updatedAt, new Date(Date.now() - staleQueuedRunCutoffMs)),
+        ),
+      ),
+    ));
+  for (const run of staleRuns) {
+    const message = "Otto's runtime stopped before this task completed.";
+    await db.update(aiRunTable).set({
+      status: "failed",
+      failure: { message },
+      workspacePath: null,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(aiRunTable.id, run.id));
+    await appendAiEvent(run.id, "run.failed", { message, recovered: true });
+  }
+  return staleRuns.length;
+}
+
+export async function getAiConversationListState(scope: AiScope) {
+  await recoverStaleAiRuns(scope);
+  const [items, active] = await Promise.all([
+    listAiConversations(scope),
+    db.select({ conversationId: aiRunTable.conversationId }).from(aiRunTable)
+      .innerJoin(aiConversationTable, eq(aiRunTable.conversationId, aiConversationTable.id))
+      .where(and(
+        eq(aiConversationTable.userId, scope.userId),
+        eq(aiConversationTable.owner, scope.owner),
+        eq(aiConversationTable.repo, scope.repo),
+        eq(aiConversationTable.branch, scope.branch),
+        inArray(aiRunTable.status, activeRunStatuses),
+      )).orderBy(desc(aiRunTable.createdAt)).limit(1),
+  ]);
+  return { items, activeConversationId: active[0]?.conversationId || null };
 }
 
 export async function createAiConversation(scope: AiScope) {
@@ -111,6 +165,21 @@ export async function createAiRun(
   } = { uploads: [], attachmentIds: [] },
 ) {
   const conversation = await requireAiConversation(scope, conversationId);
+  await recoverStaleAiRuns(scope);
+  const [active] = await db.select({ id: aiRunTable.id }).from(aiRunTable)
+    .innerJoin(aiConversationTable, eq(aiRunTable.conversationId, aiConversationTable.id))
+    .where(and(
+      eq(aiConversationTable.userId, scope.userId),
+      eq(aiConversationTable.owner, scope.owner),
+      eq(aiConversationTable.repo, scope.repo),
+      eq(aiConversationTable.branch, scope.branch),
+      inArray(aiRunTable.status, activeRunStatuses),
+    )).limit(1);
+  if (active) {
+    throw createHttpError("Otto is already working on this website.", 409, undefined, {
+      code: "AI_TASK_ACTIVE",
+    });
+  }
   const attachmentIds = [...new Set(attachmentInput.attachmentIds)];
   const reusedAttachments = attachmentIds.length === 0 ? [] : await db.select({
     id: aiAttachmentTable.id,

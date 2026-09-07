@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export type AiCapability = {
-  runId: string;
+  conversationId: string;
   workspacePath: string;
   expiresAt: number;
 };
@@ -30,7 +30,7 @@ export function verifyAiCapability(token: string): AiCapability {
     || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
   ) throw new Error("Invalid AI capability signature.");
   const value = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as AiCapability;
-  if (!value.runId || !value.workspacePath || value.expiresAt < Date.now()) {
+  if (!value.conversationId || !value.workspacePath || value.expiresAt < Date.now()) {
     throw new Error("AI capability expired or is incomplete.");
   }
   return value;

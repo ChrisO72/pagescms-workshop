@@ -15,7 +15,6 @@ import {
 } from "@/lib/ai/deployments";
 import {
   currentRepositorySha,
-  getAiRunContext,
   getRepositoryContext,
   getRunForCapability,
   publishRepositoryChanges,
@@ -27,7 +26,11 @@ async function startServer() {
   const capability = verifyAiCapability(
     process.env.PAGESCMS_AI_CAPABILITY || "",
   );
-  await getRunForCapability(capability.runId, capability.workspacePath);
+  const getCurrentContext = () => getRunForCapability(
+    capability.conversationId,
+    capability.workspacePath,
+  );
+  await getCurrentContext();
 
   const server = new McpServer({ name: "pagescms", version: "1.0.0" });
   const json = (value: unknown) => ({
@@ -41,10 +44,10 @@ async function startServer() {
         "Get the fixed repository, branch, current SHA, workspace status, and publication rules for this run.",
       inputSchema: {},
     },
-    async () =>
-      json(
-        await getRepositoryContext(capability.runId, capability.workspacePath),
-      ),
+    async () => {
+      const context = await getCurrentContext();
+      return json(await getRepositoryContext(context.run.id, capability.workspacePath));
+    },
   );
 
   server.registerTool(
@@ -54,8 +57,10 @@ async function startServer() {
         "Refresh the disposable workspace from its fixed remote branch. Refuses when local changes exist.",
       inputSchema: {},
     },
-    async () =>
-      json(await refreshRepository(capability.runId, capability.workspacePath)),
+    async () => {
+      const context = await getCurrentContext();
+      return json(await refreshRepository(context.run.id, capability.workspacePath));
+    },
   );
 
   server.registerTool(
@@ -71,14 +76,14 @@ async function startServer() {
           .describe("Concise Git commit message"),
       },
     },
-    async ({ message }) =>
-      json(
-        await publishRepositoryChanges(
-          capability.runId,
-          capability.workspacePath,
-          message,
-        ),
-      ),
+    async ({ message }) => {
+      const context = await getCurrentContext();
+      return json(await publishRepositoryChanges(
+        context.run.id,
+        capability.workspacePath,
+        message,
+      ));
+    },
   );
 
   server.registerTool(
@@ -89,7 +94,7 @@ async function startServer() {
       inputSchema: {},
     },
     async () => {
-      const context = await getAiRunContext(capability.runId);
+      const context = await getCurrentContext();
       return json(
         await triggerAiDeployment(
           context.user,
@@ -108,12 +113,13 @@ async function startServer() {
       inputSchema: { reason: z.string().min(1).max(300) },
     },
     async ({ reason }) => {
-      const context = await getAiRunContext(capability.runId);
-      const requestedSha = await currentRepositorySha(capability.runId);
+      const context = await getCurrentContext();
+      const runId = context.run.id;
+      const requestedSha = await currentRepositorySha(runId);
       const approvalId = crypto.randomUUID();
       await db.insert(aiApprovalTable).values({
         id: approvalId,
-        runId: capability.runId,
+        runId,
         kind: "production_deploy",
         requestedSha,
         details: {
@@ -125,8 +131,8 @@ async function startServer() {
       await db
         .update(aiRunTable)
         .set({ status: "waiting_approval", updatedAt: new Date() })
-        .where(eq(aiRunTable.id, capability.runId));
-      await appendAiEvent(capability.runId, "approval.requested", {
+        .where(eq(aiRunTable.id, runId));
+      await appendAiEvent(runId, "approval.requested", {
         approvalId,
         requestedSha,
         reason,
@@ -143,7 +149,7 @@ async function startServer() {
         const [run] = await db
           .select()
           .from(aiRunTable)
-          .where(eq(aiRunTable.id, capability.runId))
+          .where(eq(aiRunTable.id, runId))
           .limit(1);
         if (run?.status === "cancelled")
           throw new Error("The AI run was cancelled.");
@@ -155,7 +161,7 @@ async function startServer() {
           await db
             .update(aiRunTable)
             .set({ status: "running", updatedAt: new Date() })
-            .where(eq(aiRunTable.id, capability.runId));
+            .where(eq(aiRunTable.id, runId));
           const deployment = await triggerAiDeployment(
             context.user,
             context.scope,
@@ -163,7 +169,7 @@ async function startServer() {
             requestedSha,
           );
           await appendAiEvent(
-            capability.runId,
+            runId,
             "deployment.production_started",
             deployment,
           );
@@ -182,7 +188,7 @@ async function startServer() {
       inputSchema: {},
     },
     async () => {
-      const context = await getAiRunContext(capability.runId);
+      const context = await getCurrentContext();
       return json(await listAiDeployments(context.user, context.scope));
     },
   );
@@ -194,7 +200,7 @@ async function startServer() {
       inputSchema: { id: z.number().int().positive() },
     },
     async ({ id }) => {
-      const context = await getAiRunContext(capability.runId);
+      const context = await getCurrentContext();
       return json(await getAiDeployment(context.user, context.scope, id));
     },
   );
@@ -207,7 +213,7 @@ async function startServer() {
       inputSchema: { id: z.number().int().positive() },
     },
     async ({ id }) => {
-      const context = await getAiRunContext(capability.runId);
+      const context = await getCurrentContext();
       return json(await getAiDeploymentJobs(context.user, context.scope, id));
     },
   );
@@ -219,7 +225,7 @@ async function startServer() {
       inputSchema: { id: z.number().int().positive() },
     },
     async ({ id }) => {
-      const context = await getAiRunContext(capability.runId);
+      const context = await getCurrentContext();
       return json(await cancelAiDeployment(context.user, context.scope, id));
     },
   );

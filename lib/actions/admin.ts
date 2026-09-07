@@ -6,6 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { sessionTable } from "@/db/schema";
 import { requireAdminSession } from "@/lib/admin";
+import { cleanupAllAiSessions } from "@/lib/ai/runtime";
 
 const resetGlobalCache = async () => {
   await requireAdminSession();
@@ -39,4 +40,11 @@ const logoutAllUsers = async () => {
   redirect("/sign-in");
 };
 
-export { logoutAllUsers, logoutUserSessions, resetGlobalCache };
+const cleanupOttoSessions = async () => {
+  await requireAdminSession();
+  const result = await cleanupAllAiSessions();
+  revalidatePath("/admin");
+  return { success: true, ...result };
+};
+
+export { cleanupOttoSessions, logoutAllUsers, logoutUserSessions, resetGlobalCache };

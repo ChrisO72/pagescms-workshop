@@ -3,12 +3,21 @@ type ErrorLike = {
   statusCode?: number;
   message?: string;
   headers?: HeadersInit;
+  code?: string;
+  details?: Record<string, unknown>;
 };
 
-const createHttpError = (message: string, status: number, headers?: HeadersInit) => {
-  const error = new Error(message) as Error & { status: number; headers?: HeadersInit };
+const createHttpError = (
+  message: string,
+  status: number,
+  headers?: HeadersInit,
+  metadata?: Pick<ErrorLike, "code" | "details">,
+) => {
+  const error = new Error(message) as Error & ErrorLike;
   error.status = status;
   error.headers = headers;
+  error.code = metadata?.code;
+  error.details = metadata?.details;
   return error;
 };
 
@@ -62,6 +71,12 @@ const toErrorResponse = (error: unknown) => {
     {
       status: "error",
       message: getErrorMessage(error),
+      ...(error && typeof error === "object" && (error as ErrorLike).code
+        ? { code: (error as ErrorLike).code }
+        : {}),
+      ...(error && typeof error === "object" && (error as ErrorLike).details
+        ? { details: (error as ErrorLike).details }
+        : {}),
     },
     { status, headers },
   );

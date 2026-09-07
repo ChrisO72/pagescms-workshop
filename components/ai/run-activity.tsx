@@ -48,15 +48,14 @@ type ActivityPresentation = {
 
 const terminal = new Set(["completed", "failed", "cancelled"]);
 const workshopSetupEvents = new Set([
-  "run.started",
+  "session.starting",
   "repository.cloning",
   "repository.ready",
   "runtime.starting",
   "runtime.authenticated",
   "mcp.starting",
   "mcp.ready",
-  "turn.starting",
-  "turn.started",
+  "session.ready",
 ]);
 
 function formatDuration(milliseconds: number) {
@@ -80,7 +79,7 @@ function buildActivities(events: AiRunEvent[]) {
     if (workshopSetupEvents.has(event.type) || isRoutineMcpStatus) {
       const key = "workshop-setup";
       const existingIndex = indexes.get(key);
-      const ready = event.type === "turn.started";
+      const ready = event.type === "session.ready";
       if (existingIndex != null) {
         const existing = entries[existingIndex];
         entries[existingIndex] = {
@@ -124,6 +123,11 @@ function activityPresentation(activity: Activity): ActivityPresentation {
   if (type === "workshop.setup") return {
     icon: data.ready ? Wrench : Loader2,
     title: data.ready ? "Otto’s workshop is ready" : "Otto is tuning up the workshop…",
+    detail: null,
+  };
+  if (type === "session.reused") return {
+    icon: Wrench,
+    title: "Continued in Otto’s workshop",
     detail: null,
   };
   if (type === "mcp.status") return {
@@ -203,7 +207,19 @@ export function RunActivity({ run, events }: { run: Run; events: AiRunEvent[] })
             : "Working";
 
   return (
-    <div className="space-y-3">
+    <details open={isActive} className="group/run min-w-0">
+      {!isActive ? (
+        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 text-sm text-muted-foreground hover:text-foreground sm:ml-24">
+          {run.status === "completed" ? <CheckCircle2 className="size-4 shrink-0 text-green-600" />
+            : run.status === "failed" ? <AlertCircle className="size-4 shrink-0 text-destructive" />
+              : <CircleDot className="size-4 shrink-0" />}
+          <span className="text-foreground">Task details · {statusLabel}</span>
+          <span className="text-xs tabular-nums">· {duration}</span>
+          <span className="text-xs capitalize">· {run.model.replace("gpt-5.6-", "")}</span>
+          <ChevronRight className="size-3.5 shrink-0 transition-transform group-open/run:rotate-90" />
+        </summary>
+      ) : null}
+      <div className="space-y-3 pt-2">
       {activities.map((activity) => {
         if (activity.type === "agent.commentary") {
           return (
@@ -265,20 +281,10 @@ export function RunActivity({ run, events }: { run: Run; events: AiRunEvent[] })
         </div>
       )}
 
-      {!isActive && (
-        <div className="grid gap-1.5 text-sm sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-4">
-          <div className="text-xs font-medium text-muted-foreground">Run</div>
-          <div className="flex min-w-0 items-center gap-2 py-0.5 text-muted-foreground">
-            {run.status === "completed" ? <CheckCircle2 className="size-4 shrink-0 text-green-600" />
-              : run.status === "failed" ? <AlertCircle className="size-4 shrink-0 text-destructive" />
-                : <CircleDot className="size-4 shrink-0" />}
-            <span className="text-foreground">{statusLabel}</span>
-            <span className="text-xs tabular-nums">{duration}</span>
-            <span className="text-xs capitalize">· {run.model.replace("gpt-5.6-", "")}</span>
-          </div>
-          {run.failure?.message && <p className="text-xs text-destructive sm:col-start-2">{run.failure.message}</p>}
-        </div>
-      )}
-    </div>
+        {!isActive && run.failure?.message ? (
+          <p className="text-xs text-destructive sm:ml-24">{run.failure.message}</p>
+        ) : null}
+      </div>
+    </details>
   );
 }

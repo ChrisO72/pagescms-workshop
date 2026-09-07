@@ -63,6 +63,22 @@ type Detail = {
   events: AiRunEvent[];
 };
 
+type ConversationListState = {
+  items: AiConversationSummary[];
+  activeConversationId: string | null;
+};
+
+class AiRequestError extends Error {
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(body: { message?: string; code?: string; details?: Record<string, unknown> }) {
+    super(body.message || "Request failed.");
+    this.code = body.code;
+    this.details = body.details;
+  }
+}
+
 const activeStatuses = new Set(["queued", "running", "waiting_approval"]);
 
 function shortModel(model: string) {
@@ -108,6 +124,7 @@ export function AiPage() {
   const { config } = useConfig();
   const [conversations, setConversations] = useState<AiConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [message, setMessage] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -134,14 +151,19 @@ export function AiPage() {
   const request = useCallback(async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, options);
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.message || "Request failed.");
+    if (!response.ok) throw new AiRequestError(body);
     return body.data as T;
   }, []);
 
   const loadConversations = useCallback(async (selectFirst = false) => {
-    const items = await request<AiConversationSummary[]>(`${base}/conversations`);
-    setConversations(items);
-    if (selectFirst) setConversationId((current) => current || items[0]?.id || null);
+    const state = await request<ConversationListState>(`${base}/conversations`);
+    setConversations(state.items);
+    setActiveConversationId(state.activeConversationId);
+    if (selectFirst) {
+      setConversationId((current) => (
+        state.activeConversationId || current || state.items[0]?.id || null
+      ));
+    }
   }, [base, request]);
 
   const loadDetail = useCallback(async (id: string) => {
@@ -169,6 +191,7 @@ export function AiPage() {
 
   const activeRun = [...(detail?.runs || [])].reverse().find((run) => activeStatuses.has(run.status));
   const activeRunId = activeRun?.id;
+  const scopeBusy = Boolean(activeConversationId);
   const ottoState = getOttoState(Boolean(activeRun));
 
   useEffect(() => {
@@ -215,7 +238,7 @@ export function AiPage() {
     + reusedAttachments.reduce((total, attachment) => total + attachment.sizeBytes, 0);
 
   const addFiles = (incoming: File[]) => {
-    if (activeRun || sending) return;
+    if (scopeBusy || sending) return;
     const accepted = incoming.filter(isAcceptedFile);
     if (accepted.length !== incoming.length) {
       toast.error("Otto currently accepts PNG, JPEG, WebP, and plain-text or code files.");
@@ -236,7 +259,7 @@ export function AiPage() {
   };
 
   const reuseAttachment = (attachment: AiAttachment) => {
-    if (activeRun || sending || reusedAttachments.some((current) => current.id === attachment.id)) return;
+    if (scopeBusy || sending || reusedAttachments.some((current) => current.id === attachment.id)) return;
     if (pendingFiles.length + reusedAttachments.length >= AI_ATTACHMENT_MAX_FILES) {
       toast.error(`Attach up to ${AI_ATTACHMENT_MAX_FILES} files per message.`);
       return;
@@ -248,45 +271,78 @@ export function AiPage() {
     setReusedAttachments((current) => [...current, attachment]);
   };
 
-  const createConversation = async () => {
+  const createConversation = async (discardUnpublished = false) => {
+    if (scopeBusy || sending) return;
     try {
-      const item = await request<AiConversationSummary>(`${base}/conversations`, { method: "POST" });
+      const item = await request<AiConversationSummary>(`${base}/conversations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discardUnpublished }),
+      });
       setConversations((current) => [item, ...current]);
       setConversationId(item.id);
       setMessage("");
       setPendingFiles([]);
       setReusedAttachments([]);
     } catch (error) {
+      if (
+        error instanceof AiRequestError
+        && error.code === "AI_UNPUBLISHED_CHANGES"
+        && !discardUnpublished
+        && window.confirm(`${error.message}\n\nDiscard these changes and start a new chat?`)
+      ) {
+        await createConversation(true);
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Could not create a conversation.");
     }
   };
 
-  const sendMessage = async (content = message, retryAttachments?: AiAttachment[]) => {
+  const sendMessage = async (
+    content = message,
+    retryAttachments?: AiAttachment[],
+    discardUnpublished = false,
+  ) => {
     const trimmed = content.trim();
     const filesToSend = pendingFiles;
     const attachmentsToReuse = retryAttachments ?? reusedAttachments;
-    if ((!trimmed && filesToSend.length === 0 && attachmentsToReuse.length === 0) || sending || activeRun) return;
+    if ((!trimmed && filesToSend.length === 0 && attachmentsToReuse.length === 0) || sending || scopeBusy) return;
     setSending(true);
     try {
       let id = conversationId;
       if (!id) {
-        const item = await request<AiConversationSummary>(`${base}/conversations`, { method: "POST" });
+        const item = await request<AiConversationSummary>(`${base}/conversations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ discardUnpublished }),
+        });
         id = item.id;
         setConversationId(id);
       }
-      setMessage("");
-      setPendingFiles([]);
-      setReusedAttachments([]);
       const form = new FormData();
       form.set("content", trimmed);
+      if (discardUnpublished) form.set("discardUnpublished", "true");
       filesToSend.forEach((file) => form.append("files", file));
       attachmentsToReuse.forEach((attachment) => form.append("attachmentIds", attachment.id));
       await request(`${base}/conversations/${id}/messages`, {
         method: "POST",
         body: form,
       });
+      setMessage("");
+      setPendingFiles([]);
+      setReusedAttachments([]);
       await Promise.all([loadDetail(id), loadConversations()]);
     } catch (error) {
+      if (
+        error instanceof AiRequestError
+        && error.code === "AI_UNPUBLISHED_CHANGES"
+        && !discardUnpublished
+        && window.confirm(`${error.message}\n\nDiscard these changes and continue in this chat?`)
+      ) {
+        setSending(false);
+        await sendMessage(trimmed, attachmentsToReuse, true);
+        return;
+      }
       setMessage(trimmed);
       setPendingFiles(filesToSend);
       setReusedAttachments(attachmentsToReuse);
@@ -314,7 +370,7 @@ export function AiPage() {
     if (!conversationId || !activeRun) return;
     try {
       await request(`${base}/conversations/${conversationId}/runs/${activeRun.id}/cancel`, { method: "POST" });
-      await loadDetail(conversationId);
+      await Promise.all([loadDetail(conversationId), loadConversations()]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not stop the run.");
     }
@@ -328,8 +384,8 @@ export function AiPage() {
       <div className="flex h-full min-h-0 w-full overflow-hidden bg-background">
         <aside className="hidden w-64 shrink-0 flex-col border-r bg-muted/20 md:flex">
           <div className="p-3">
-            <Button variant="outline" className="w-full justify-start" onClick={createConversation}>
-              <Plus /> New conversation
+            <Button variant="outline" className="w-full justify-start" disabled={scopeBusy || sending} onClick={() => createConversation()}>
+              <Plus /> New chat
             </Button>
           </div>
           <Separator />
@@ -339,6 +395,7 @@ export function AiPage() {
                 key={conversation.id}
                 variant={conversation.id === conversationId ? "secondary" : "ghost"}
                 className="h-auto w-full justify-start px-3 py-2 text-left"
+                disabled={scopeBusy || sending}
                 onClick={() => setConversationId(conversation.id)}
               >
                 <span className="truncate">{conversation.title}</span>
@@ -350,16 +407,17 @@ export function AiPage() {
 
         <main className="relative flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2 border-b px-4 py-3">
-            <Button size="sm" variant="outline" className="md:hidden" onClick={createConversation}>
+            <Button size="sm" variant="outline" className="md:hidden" disabled={scopeBusy || sending} onClick={() => createConversation()}>
               <Plus /> New
             </Button>
             <select
               aria-label="Conversation"
               className="min-w-0 flex-1 rounded-md border bg-background px-3 py-1.5 text-sm md:hidden"
               value={conversationId || ""}
+              disabled={scopeBusy || sending}
               onChange={(event) => setConversationId(event.target.value || null)}
             >
-              <option value="">New conversation</option>
+              <option value="">New chat</option>
               {conversations.map((conversation) => (
                 <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
               ))}
@@ -423,7 +481,7 @@ export function AiPage() {
                                         type="button"
                                         aria-label={`Attach ${attachment.name} again`}
                                         title="Attach again"
-                                        disabled={Boolean(activeRun) || sending}
+                                        disabled={scopeBusy || sending}
                                         onClick={() => reuseAttachment(attachment)}
                                         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
                                       >
@@ -483,7 +541,7 @@ export function AiPage() {
               <InputGroup
                 className={draggingFiles ? "items-end rounded-xl border-primary bg-primary/5 shadow-sm" : "items-end rounded-xl bg-background shadow-sm"}
                 onDragOver={(event) => {
-                  if (activeRun || sending || !event.dataTransfer.types.includes("Files")) return;
+                  if (scopeBusy || sending || !event.dataTransfer.types.includes("Files")) return;
                   event.preventDefault();
                   setDraggingFiles(true);
                 }}
@@ -530,7 +588,7 @@ export function AiPage() {
                   placeholder="Ask Otto to update your site..."
                   rows={2}
                   value={message}
-                  disabled={Boolean(activeRun) || sending}
+                  disabled={scopeBusy || sending}
                   onChange={(event) => setMessage(event.target.value)}
                   onPaste={(event) => {
                     const files = Array.from(event.clipboardData.files);
@@ -565,7 +623,7 @@ export function AiPage() {
                       variant="ghost"
                       aria-label="Attach files"
                       title="Attach files"
-                      disabled={Boolean(activeRun) || sending}
+                      disabled={scopeBusy || sending}
                       onClick={() => fileInputRef.current?.click()}
                     >
                       <Paperclip />

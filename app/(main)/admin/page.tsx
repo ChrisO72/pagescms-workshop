@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { desc, eq, or, sql } from "drizzle-orm";
-import { ArrowLeft, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Power, RefreshCcw } from "lucide-react";
 import { MainRootLayout } from "../main-root-layout";
 import { requireAdminSession } from "@/lib/admin";
 import { db } from "@/db";
@@ -19,7 +19,12 @@ import { AdminConfirmActionButton } from "@/components/admin-confirm-action-butt
 import { AdminTimeAgo } from "@/components/admin-time-ago";
 import { AdminUserSearch } from "@/components/admin-user-search";
 import { AdminUserRowActions } from "@/components/admin-user-row-actions";
-import { logoutAllUsers, logoutUserSessions, resetGlobalCache } from "@/lib/actions/admin";
+import {
+  cleanupOttoSessions,
+  logoutAllUsers,
+  logoutUserSessions,
+  resetGlobalCache,
+} from "@/lib/actions/admin";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Avatar,
@@ -351,6 +356,32 @@ export default async function Page({
                 </Pagination>
               </div>
             </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Otto runtime</CardTitle>
+              <CardDescription>
+                Stop every warm Otto session and queued task on this server instance.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Use this temporary cleanup control if agent or MCP processes are consuming
+              memory. Active tasks will be cancelled and unpublished workspace changes
+              will be discarded.
+            </CardContent>
+            <CardFooter className="flex justify-end">
+              <AdminConfirmActionButton
+                action={cleanupOttoSessions}
+                label="Clean up Otto"
+                title="Clean up all Otto sessions?"
+                description="This stops active tasks, warm Codex and MCP processes, and removes their disposable checkouts. Unpublished changes will be lost."
+                confirmLabel="Clean up Otto"
+                variant="destructive"
+                size="sm"
+                icon={<Power className="size-4" />}
+              />
+            </CardFooter>
           </Card>
 
           <Card>

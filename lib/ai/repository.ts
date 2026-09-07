@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConversationTable, aiRunTable, userTable } from "@/db/schema";
 import { appendAiEvent } from "@/lib/ai/store";
@@ -116,8 +116,12 @@ export async function currentRepositorySha(runId: string) {
   return branch.data.commit.sha;
 }
 
-export async function getRunForCapability(runId: string, workspacePath: string) {
-  const context = await getAiRunContext(runId);
-  if (context.run.workspacePath !== workspacePath) throw new Error("Workspace does not match this capability.");
-  return context;
+export async function getRunForCapability(conversationId: string, workspacePath: string) {
+  const [run] = await db.select({ id: aiRunTable.id }).from(aiRunTable).where(and(
+    eq(aiRunTable.conversationId, conversationId),
+    eq(aiRunTable.workspacePath, workspacePath),
+    inArray(aiRunTable.status, ["running", "waiting_approval"]),
+  )).orderBy(desc(aiRunTable.createdAt)).limit(1);
+  if (!run) throw new Error("No active AI run matches this capability.");
+  return getAiRunContext(run.id);
 }
