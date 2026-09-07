@@ -44,8 +44,10 @@ The initial functional implementation is intentionally self-contained:
   official Codex App Server over stdio. The selected model and reasoning effort
   are supplied per turn. Each disposable App Server is authenticated through
   its `account/login/start` API-key flow, conversation history is injected,
-  filesystem access is limited to the checkout, and live web search plus
-  outbound workspace network access are enabled for current external content.
+  and live web search plus outbound workspace network access are enabled for
+  current external content. Codex runs without its nested Bubblewrap sandbox
+  because the Render web service supplies the outer runtime isolation; Otto is
+  instructed to work only in the disposable checkout.
   Spawned shell commands inherit only `PATH`, not application secrets. The MCP
   child is launched with the application's absolute Node executable and the
   `tsx` loader, so it does not depend on `PATH`; startup failures are captured

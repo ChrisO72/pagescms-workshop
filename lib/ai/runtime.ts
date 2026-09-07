@@ -161,6 +161,8 @@ async function writeCodexConfig(root: string, capability: string) {
   const inheritedPath = process.env.PATH || "/usr/local/bin:/usr/bin:/bin";
   const config = [
     `shell_environment_policy = { inherit = "none", set = { PATH = ${JSON.stringify(inheritedPath)} } }`,
+    'sandbox_mode = "danger-full-access"',
+    'approval_policy = "never"',
     'web_search = "live"',
     "",
     "[sandbox_workspace_write]",
@@ -442,7 +444,7 @@ async function executeAiRun(runId: string) {
       model: context.run.model,
       cwd: workspace.workspacePath,
       approvalPolicy: "never",
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
       ephemeral: true,
       developerInstructions: [
         "You are Otto, the web mechanic: the friendly, practical Pages CMS repository agent.",
@@ -547,11 +549,7 @@ async function executeAiRun(runId: string) {
       effort: context.run.effort,
       approvalPolicy: "never",
       sandboxPolicy: {
-        type: "workspaceWrite",
-        writableRoots: [workspace.workspacePath],
-        networkAccess: true,
-        excludeTmpdirEnvVar: true,
-        excludeSlashTmp: true,
+        type: "dangerFullAccess",
       },
     });
     if (active) active.turnId = turnStart.turn.id as string;
