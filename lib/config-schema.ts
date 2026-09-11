@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { fieldTypes } from "@/fields/registry";
+import { isHttpUrl } from "@/lib/sidebar-links";
 
 const ActionSchema = z
   .object({
@@ -96,6 +97,50 @@ const ActionSchema = z
       .optional(),
   })
   .strict();
+
+const SidebarLinkSchema = z
+  .object({
+    name: z
+      .string({
+        required_error: "'name' is required.",
+        invalid_type_error: "'name' must be a string.",
+      })
+      .regex(/^[a-zA-Z0-9-_]+$/, {
+        message: "'name' must be alphanumeric with dashes and underscores.",
+      }),
+    label: z.string({
+      required_error: "'label' is required.",
+      invalid_type_error: "'label' must be a string.",
+    }),
+    url: z
+      .string({
+        required_error: "'url' is required.",
+        invalid_type_error: "'url' must be a string.",
+      })
+      .url({ message: "'url' must be an absolute URL." })
+      .refine(isHttpUrl, {
+        message: "'url' must use the http or https protocol.",
+      }),
+  })
+  .strict();
+
+const SidebarLinksSchema = z
+  .array(SidebarLinkSchema, {
+    message: "'links' must be an array of sidebar link definitions.",
+  })
+  .superRefine((links, ctx) => {
+    const names = new Set<string>();
+    links.forEach((link, index) => {
+      if (names.has(link.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Sidebar link names must be unique.",
+          path: [index, "name"],
+        });
+      }
+      names.add(link.name);
+    });
+  });
 
 const CommitTemplatesSchema = z
   .object({
@@ -790,6 +835,7 @@ const ConfigSchema = z
         message: "'actions' must be an array of action definitions.",
       })
       .optional(),
+    links: SidebarLinksSchema.optional(),
     settings: z
       .union([
         z

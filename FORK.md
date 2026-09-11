@@ -12,6 +12,23 @@ surface.
 - `scripts/setup-github-app.mjs` follows the current GitHub App manifest flow
   and requests repository contents and Actions write permissions.
 
+## Sidebar links
+
+Repositories can add a fixed `Links` section to the repository sidebar with a
+top-level `links` array in `.pages.yml`:
+
+```yaml
+links:
+  - name: website
+    label: View website
+    url: https://example.com
+```
+
+Each link requires a unique config-friendly `name`, a `label`, and an absolute
+HTTP or HTTPS `url`. Links open in a new tab. The implementation is limited to
+the config schema and the repository sidebar so it remains isolated from
+upstream content navigation and routing.
+
 ## AI assistant
 
 The repository-scoped AI page lives at

@@ -15,6 +15,7 @@ import { useRepo } from "@/contexts/repo-context";
 import { useUser } from "@/contexts/user-context";
 import { hasGithubIdentity } from "@/lib/authz-shared";
 import { isCacheEnabled, isConfigEnabled } from "@/lib/config";
+import { getSidebarLinks } from "@/lib/sidebar-links";
 import { getRootActions } from "@/lib/actions";
 import { getVisits } from "@/lib/tracker";
 import { RepoActionButtons } from "@/components/repo/repo-action-buttons";
@@ -80,6 +81,7 @@ type NavItem = {
   label: string;
   href: string;
   icon: React.ReactNode;
+  external?: boolean;
 };
 
 type NavigationNode = {
@@ -367,6 +369,17 @@ export function RepoSidebar() {
     () => getRootActions(config?.object),
     [config?.object],
   );
+  const linkItems = useMemo<NavItem[]>(() => {
+    if (!config?.object) return [];
+
+    return getSidebarLinks((config.object as any).links).map((link) => ({
+      key: `link-${link.name}`,
+      label: link.label,
+      href: link.url,
+      icon: <ArrowUpRight className="size-4" />,
+      external: true,
+    }));
+  }, [config?.object]);
   const aiItems = useMemo<NavItem[]>(() => {
     if (!config) return [];
 
@@ -564,14 +577,27 @@ export function RepoSidebar() {
           <SidebarMenu>
             {items.map((item) => {
               const isActive =
-                pathname === item.href || pathname.startsWith(`${item.href}/`);
+                !item.external &&
+                (pathname === item.href || pathname.startsWith(`${item.href}/`));
               return (
                 <SidebarMenuItem key={item.key}>
                   <SidebarMenuButton asChild isActive={isActive}>
-                    <Link href={item.href} onClick={handleNavigation}>
-                      {item.icon}
-                      <span>{item.label}</span>
-                    </Link>
+                    {item.external ? (
+                      <a
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={handleNavigation}
+                      >
+                        {item.icon}
+                        <span>{item.label}</span>
+                      </a>
+                    ) : (
+                      <Link href={item.href} onClick={handleNavigation}>
+                        {item.icon}
+                        <span>{item.label}</span>
+                      </Link>
+                    )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               );
@@ -586,6 +612,7 @@ export function RepoSidebar() {
     renderFlatGroup("AI", aiItems),
     renderNavigationGroup("Content", contentNavigation),
     renderNavigationGroup("Media", mediaNavigation),
+    renderFlatGroup("Links", linkItems),
     rootActions.length > 0 && config
       ? (
         <SidebarGroup key="Actions">
